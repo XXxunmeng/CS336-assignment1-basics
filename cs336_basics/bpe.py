@@ -5,25 +5,97 @@ from collections import defaultdict
 from collections.abc import Iterable
 from typing import List, Tuple, Dict, Set
 
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
 class Tokenizer:
     def __init__(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None=None):
         self.vocab = vocab
         self.merges = merges
-        self.special_tokens = special_tokens
+        self.merges_rank = {merge: i for i, merge in enumerate(self.merges)}
+        # 按照长度从长到短排序，能避免较长的special_token被拆分
+        self.special_tokens = sorted(special_tokens or [], key=lambda x: -len(x))
         self.token2id = {v:k for k, v in vocab.items()}
 
     @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
-        pass
+        # vocab为json文件，token: id
+        with open(vocab_filepath, "r", encoding="utf-8") as f:
+            vocab_json = json.load(f)
+        
+        vocab = {int(v): k.encode("utf-8") for k, v in vocab_json.items()}
+        merges = []
+        with open(merges_filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                tmp = line.strip().split()
+                if len(tmp) == 2:
+                    merges.append((tmp[0].encode("utf-8"), tmp[1].encode("utf-8")))
+
+        return cls(vocab, merges, special_tokens=special_tokens)
 
     def encode(self, text:str) -> list[int]:
-        pass
+        if not text:
+            return []
+
+        if self.special_tokens:
+            # 按照sepcial_tokens先拆分
+            pattern = "(" + "|".join(regex.escape(t) for t in self.special_tokens) + ")"
+            chunks = regex.split(pattern, text)
+        else:
+            chunks = [text]
+        result = []
+        for chunk in chunks:
+            if not chunk:
+                continue
+
+            if chunk in self.special_tokens:
+                result.append(self.token2id[chunk.encode('utf-8')])
+            else:
+                for word in regex.findall(PAT, chunk):
+                    if not word:
+                        continue
+                    # 按照PAT拆分后，每个token拆分字节
+                    tokens = [bytes([b]) for b in word.encode("utf-8")]
+                    while len(tokens) > 1:
+                        minm_rank = len(self.merges) + 1
+                        best_pair = None
+                        # 找优先级最高的token先合并
+                        for i in range(len(tokens) - 1):
+                            tmp_rank = self.merges_rank.get((tokens[i], tokens[i + 1]), float('inf'))
+                            if tmp_rank < minm_rank:
+                                minm_rank = tmp_rank
+                                best_pair = (tokens[i], tokens[i + 1])
+
+                        if best_pair is None:
+                            break
+                        new_tokens = []
+                        i = 0
+                        best_pair_str = best_pair[0] + best_pair[1]
+                        while i < len(tokens):
+                            if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
+                                new_tokens.append(best_pair_str)
+                                i += 2
+                            else:
+                                new_tokens.append(tokens[i])
+                                i += 1
+                        tokens = new_tokens
+                    for i in range(len(tokens)):
+                        result.append(self.token2id[tokens[i]])
+        return result
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterable[int]:
-        pass
+        for text in iterable:
+            yield from self.encode(text)
 
     def decode(self, ids: list[int]) -> str:
-        pass
+        result = bytes()
+        for token_id in ids:
+            if token_id < len(self.vocab):
+                token = self.vocab[token_id]
+            else:
+                token = bytes("\uFFFD", encoding='utf-8')
+            result += token
+        result = result.decode(encoding='utf-8', errors='replace')
+        return result
 
 def find_max_pair(count):
     max_count = 0
@@ -66,7 +138,6 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
         text = ""
     # pre-tokenization
     chunks = regex.split('|'.join(map(regex.escape, special_tokens)), text)
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     pretoken_counts = defaultdict(int)
     for chunk in chunks:
         for word in regex.findall(PAT, chunk):
