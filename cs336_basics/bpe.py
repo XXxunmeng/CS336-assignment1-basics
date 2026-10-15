@@ -4,6 +4,7 @@ import regex
 from collections import defaultdict
 from collections.abc import Iterable
 from typing import List, Tuple, Dict, Set
+import time
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -183,10 +184,29 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
 
     return vocab, merges
 
+def save_bpe_model(output_dir: str, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]]):
+    os.makedirs(output_dir, exist_ok=True)
+    vocab_save = {v.decode('utf-8', errors='replace'): str(k) for k, v in vocab.items()}
+    with open(os.path.join(output_dir, "TinyStories_vocab.json"), "w", encoding='utf-8') as f:
+        json.dump(vocab_save, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(output_dir, "TinyStories_merges.txt"), "w", encoding='utf-8') as f:
+        for a, b in merges:
+            f.write(f"{a.decode(encoding='utf-8', errors='replace')} {b.decode(encoding='utf-8', errors='replace')}\n")
+
+def test():
+    import tiktoken
+    tokenizer = tiktoken.get_encoding('gpt2')
+    test_string = "Hello, how <|endoftext|><|endoftext|> are you?<|endoftext|>"
+    ids = tokenizer.encode(test_string, allowed_special={"<|endoftext|><|endoftext|>", "<|endoftext|>"})
+    decoded = [tokenizer.decode([x]) for x in ids]
+    print(f"tiktoken encoded: {ids}, decoded: {decoded}")
+
 if __name__ == "__main__":
     special_tokens = ["<|endoftext|>"]
-    print(special_tokens)
-    vocab, merges = train_bpe("../data/TinyStoriesV2-GPT4-valid.txt", 20000, [""])
-
-    print(vocab)
-    print(merges)
+    start_time = time.time()
+    vocab, merges = train_bpe("data/TinyStoriesV2-GPT4-train.txt", 10000, special_tokens)
+    elapsed = time.time() - start_time
+    print(f"Training completed in {elapsed:.2f} seconds.")
+    print(f"Vocab size: {len(vocab)}")
+    print(f"Longest token: {max(vocab.values(), key=len)} (length={len(max(vocab.values(), key=len))})")
+    save_bpe_model("cs336_basics", vocab, merges)
