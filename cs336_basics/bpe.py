@@ -5,6 +5,8 @@ from collections import defaultdict
 from collections.abc import Iterable
 from typing import List, Tuple, Dict, Set
 import time
+import pickle
+import numpy as np
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -17,20 +19,28 @@ class Tokenizer:
         self.special_tokens = sorted(special_tokens or [], key=lambda x: -len(x))
         self.token2id = {v:k for k, v in vocab.items()}
 
+    # @classmethod
+    # def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
+    #     # vocab为json文件，token: id
+    #     with open(vocab_filepath, "r", encoding="utf-8") as f:
+    #         vocab_json = json.load(f)
+        
+    #     vocab = {int(v): k.encode("utf-8") for k, v in vocab_json.items()}
+    #     merges = []
+    #     with open(merges_filepath, "r", encoding="utf-8") as f:
+    #         for line in f:
+    #             tmp = line.strip().split()
+    #             if len(tmp) == 2:
+    #                 merges.append((tmp[0].encode("utf-8"), tmp[1].encode("utf-8")))
+
+    #     return cls(vocab, merges, special_tokens=special_tokens)
+
     @classmethod
     def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
-        # vocab为json文件，token: id
-        with open(vocab_filepath, "r", encoding="utf-8") as f:
-            vocab_json = json.load(f)
-        
-        vocab = {int(v): k.encode("utf-8") for k, v in vocab_json.items()}
-        merges = []
-        with open(merges_filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                tmp = line.strip().split()
-                if len(tmp) == 2:
-                    merges.append((tmp[0].encode("utf-8"), tmp[1].encode("utf-8")))
-
+        with open(vocab_filepath, "rb") as f:
+            vocab = pickle.load(f)
+        with open(merges_filepath, "rb") as f:
+            merges = pickle.load(f)
         return cls(vocab, merges, special_tokens=special_tokens)
 
     def encode(self, text:str) -> list[int]:
@@ -184,29 +194,42 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
 
     return vocab, merges
 
-def save_bpe_model(output_dir: str, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]]):
+def save_bpe_model(vocab, merges, output_dir):
     os.makedirs(output_dir, exist_ok=True)
-    vocab_save = {v.decode('utf-8', errors='replace'): str(k) for k, v in vocab.items()}
-    with open(os.path.join(output_dir, "TinyStories_vocab.json"), "w", encoding='utf-8') as f:
-        json.dump(vocab_save, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(output_dir, "TinyStories_merges.txt"), "w", encoding='utf-8') as f:
-        for a, b in merges:
-            f.write(f"{a.decode(encoding='utf-8', errors='replace')} {b.decode(encoding='utf-8', errors='replace')}\n")
+    with open(os.path.join(output_dir, "TinyStories_vocab.pkl"), "wb") as f:
+        pickle.dump(vocab, f)
+    with open(os.path.join(output_dir, "TinyStories_merges.pkl"), "wb") as f:
+        pickle.dump(merges, f)
 
-def test():
-    import tiktoken
-    tokenizer = tiktoken.get_encoding('gpt2')
-    test_string = "Hello, how <|endoftext|><|endoftext|> are you?<|endoftext|>"
-    ids = tokenizer.encode(test_string, allowed_special={"<|endoftext|><|endoftext|>", "<|endoftext|>"})
-    decoded = [tokenizer.decode([x]) for x in ids]
-    print(f"tiktoken encoded: {ids}, decoded: {decoded}")
+
+def encode_dataset(vocab_path, merges_path, data_path, save_path):
+    with open(vocab_path, "rb") as f:
+        vocab = pickle.load(f)
+    with open(merges_path, "rb") as f:
+        merges = pickle.load(f)
+
+    tokenizer = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
+
+    ids = []
+    print("开始编码")
+    with open(data_path, "r", encoding='utf-8') as f:
+        for id_tmp in tokenizer.encode_iterable(f):
+            ids.append(id_tmp)
+    arr = np.array(ids, dtype=np.uint16)
+    np.save(save_path, arr)
+    print(f"编码完成，共{len(ids)}个token")
 
 if __name__ == "__main__":
-    special_tokens = ["<|endoftext|>"]
-    start_time = time.time()
-    vocab, merges = train_bpe("data/TinyStoriesV2-GPT4-train.txt", 10000, special_tokens)
-    elapsed = time.time() - start_time
-    print(f"Training completed in {elapsed:.2f} seconds.")
-    print(f"Vocab size: {len(vocab)}")
-    print(f"Longest token: {max(vocab.values(), key=len)} (length={len(max(vocab.values(), key=len))})")
-    save_bpe_model("cs336_basics", vocab, merges)
+    # special_tokens = ["<|endoftext|>"]
+    # start_time = time.time()
+    # vocab, merges = train_bpe("data/TinyStoriesV2-GPT4-train.txt", 10000, special_tokens)
+    # elapsed = time.time() - start_time
+    # print(f"Training completed in {elapsed:.2f} seconds.")
+    # print(f"Vocab size: {len(vocab)}")
+    # print(f"Longest token: {max(vocab.values(), key=len)} (length={len(max(vocab.values(), key=len))})")
+    # save_bpe_model(vocab, merges, "cs336_basics")
+
+    # test()
+
+    encode_dataset("cs336_basics/TinyStories_vocab.pkl", "cs336_basics/TinyStories_merges.pkl", "data/TinyStoriesV2-GPT4-train.txt", "data/TinyStoriesV2-GPT4-train_ids.npy")
+    
